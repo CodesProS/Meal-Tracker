@@ -1,50 +1,97 @@
-# Welcome to your Expo app 👋
+# 🍽️ Meal Tracker
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+A cross-platform mobile application built with **React Native (Expo)** for tracking foods, meals, and recipes with detailed nutrition analytics and flexible logging options.
 
-## Get started
+---
 
-1. Install dependencies
+## 📌 Overview
 
-   ```bash
-   npm install
-   ```
+Meal Tracker helps users monitor their daily nutrition by logging foods, creating reusable recipes, and analyzing macro intake over time. The app is designed to handle real-world scenarios like portion-based eating, grams-to-servings conversion, and weekly nutrition tracking.
 
-2. Start the app
+---
 
-   ```bash
-   npx expo start
-   ```
+## 🚀 Features
 
-In the output, you'll find options to open the app in a
+- 📚 **Food Library Management**  
+  Create, edit, and delete custom food items with full macro breakdown (calories, protein, carbs, fats, sugar, sodium, fiber, etc.)
 
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
+- 🍱 **Meal Logging System**  
+  Log meals by selecting foods and specifying intake via:
+  - Servings  
+  - Grams (auto-converted to servings)
 
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
+- 🧩 **Recipe Builder**  
+  - Combine multiple foods into reusable recipes  
+  - Support for servings or grams per ingredient  
+  - Dynamic **portion-based scaling** when consuming recipes  
 
-## Get a fresh project
+- 📊 **Nutrition Analytics**  
+  - Daily macro aggregation  
+  - Weekly averages with intelligent day tracking  
+  - Real-time updates based on enabled/disabled meals  
 
-When you're ready, run:
+- 🔄 **Data Persistence & Migration**  
+  - Local storage using AsyncStorage  
+  - Automatic data migration for backward compatibility  
+
+- 📤 **Import / Export Support**  
+  - Export all data as JSON  
+  - Import backups for portability and recovery  
+
+- 🔍 **Search & Filtering**  
+  - Quickly find foods and recipes  
+  - Ingredient-level search support  
+
+- ✏️ **Inline Editing & UX Enhancements**  
+  - Edit foods and meals directly  
+  - Toggle meal visibility  
+  - Keyboard-aware modals and smooth interactions  
+
+---
+
+## 🛠️ Tech Stack
+
+- **React Native (Expo)**
+- **AsyncStorage** (local persistence)
+- **Expo FileSystem, Sharing, DocumentPicker**
+- **React Hooks (useState, useEffect, useMemo)**
+- **Expo Router (navigation structure)**
+
+---
+
+## 🧠 Key Engineering Highlights
+
+- ⚙️ **Grams ↔ Servings Conversion**  
+  Converts user input dynamically based on serving size metadata.
+
+- 📏 **Recipe Scaling Logic**  
+  Implements portionFactor-based scaling to adjust nutrition based on consumed quantity.
+
+- 🔄 **Backward-Compatible Data Migration**  
+  Ensures older stored data remains usable after schema updates.
+
+- 📊 **Efficient Aggregation**  
+  Uses memoization (`useMemo`) for optimized daily and weekly macro calculations.
+
+---
+
+## 📱 Screenshots
+
+- Home
+![Home](./screenshots/home.png)  
+- Log Meal Modal
+![Log Meal](./screenshots/foodlog.png)  
+- Recipe Builder
+![Recipe Builder](./screenshots/Recipebuilder.png)  
+- Weekly Analytics
+![Analytics](./screenshots/weekly_average.png)  
+
+---
+
+## ⚙️ Setup & Installation
 
 ```bash
-npm run reset-project
-```
-
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
-
-## Learn more
-
-To learn more about developing your project with Expo, look at the following resources:
-
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
-
-## Join the community
-
-Join our community of developers creating universal apps.
-
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+git clone https://github.com/YOUR_USERNAME/meal-tracker.git
+cd meal-tracker
+npm install
+npx expo start
