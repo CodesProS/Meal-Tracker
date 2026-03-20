@@ -77,15 +77,9 @@ Meal Tracker helps users monitor their daily nutrition by logging foods, creatin
 
 ## 📱 Screenshots
 
-- Home
-![Home](./screenshots/home.png)  
-- Log Meal Modal
-![Log Meal](./screenshots/foodlog.png)  
-- Recipe Builder
-![Recipe Builder](./screenshots/Recipebuilder.png)  
-- Weekly Analytics
-![Analytics](./screenshots/weekly_average.png)  
-
+| Home | Log Meal | Recipe Builder | Analytics |
+|------|----------|----------------|----------|
+| <img src="./screenshots/home.png"/> | <img src="./screenshots/foodlog.png"/> | <img src="./screenshots/Recipebuilder.png"/> | <img src="./screenshots/weekly_average.png"/> |
 ---
 
 ## ⚙️ Setup & Installation
