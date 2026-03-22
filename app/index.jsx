@@ -67,16 +67,48 @@ export default function App() {
   const [recipeDraftItems, setRecipeDraftItems] = useState([]);
   // array of { foodId: number, servings: string }
 
-  const [recipeInputMode, setRecipeInputMode] = useState('servings'); // 'servings' | 'grams' | 'quantity'
-  const [recipeFoodGrams, setRecipeFoodGrams] = useState('100');
+  const [recipeInputMode, setRecipeInputMode] = useState('servings'); // 'servings' | 'amount'
+  const [recipeFoodUnits, setRecipeFoodUnits] = useState('100');
 
-  const [mealInputMode, setMealInputMode] = useState('servings'); // 'servings' | 'grams' | 'quantity'
-  const [mealAmount, setMealAmount] = useState('1'); // user input (servings or grams)
+  const [mealInputMode, setMealInputMode] = useState('servings'); // 'servings' | 'amount'
+  const [mealAmount, setMealAmount] = useState('1'); // user input (servings or units)
 
   const [recipePortionsEaten, setRecipePortionsEaten] = useState('1');
   const [recipeFoodQuantity, setRecipeFoodQuantity] = useState('1');
 
   const [showWeeklyStats, setShowWeeklyStats] = useState(false);
+
+  const MEASURABLE_UNITS = [
+    'g', 'gram', 'grams',
+    'kg', 'mg',
+    'ml', 'l', 'liter', 'liters',
+    'cup', 'cups',
+    'tbsp', 'tsp',
+    'oz', 'fl oz', 'lb'
+  ];
+
+  const normalizeUnit = (unit) => {
+    const u = String(unit || '').trim().toLowerCase();
+
+    const map = {
+      gram: 'g',
+      grams: 'g',
+      kg: 'kg',
+      mg: 'mg',
+      liter: 'l',
+      liters: 'l',
+      cup: 'cup',
+      cups: 'cup',
+      tbsp: 'tbsp',
+      tsp: 'tsp',
+      oz: 'oz',
+      'fl oz': 'fl oz',
+      lb: 'lb',
+      ml: 'ml',
+      l: 'l',
+    };
+    return map[u] || u;
+  };
 
   const startRecipeDraft = (recipeId) => {
     const recipe = recipes.find(r => r.id === Number(recipeId));
@@ -104,9 +136,9 @@ export default function App() {
       enabled: true,
       foodId: food.id,
       foodName: food.name,
-      quantityUnit:
-        mode === 'quantity'
-          ? extractServingQuantity(food.servingSize)?.quantityUnit || ''
+      amountLabel:
+        mode === 'amount'
+          ? extractServingAmount(food.servingSize)?.label || ''
           : '',
 
       // ✅ store how it was logged
@@ -129,6 +161,28 @@ export default function App() {
     };
   };
 
+  const extractServingUnit = (servingSize) => {
+    if (!servingSize) return null;
+
+    const text = String(servingSize).trim().toLowerCase();
+
+    // supports: "240 ml", "1 cup", "30 g", "2 tbsp"
+    const match = text.match(/^([\d.]+)\s*([a-zA-Z].*)$/);
+    if (!match) return null;
+
+    const amount = parseFloat(match[1]);
+    const rawUnit = match[2].trim();
+    const unit = normalizeUnit(rawUnit);
+
+    if (!Number.isFinite(amount) || amount <= 0) return null;
+
+    if (!MEASURABLE_UNITS.includes(unit)) return null;
+
+    return {
+      amountPerServing: amount,
+      unit,
+    };
+  };
 
   const handleLogRecipe = () => {
     if (!selectedRecipeId) return;
@@ -258,13 +312,42 @@ export default function App() {
             text: 'Import',
             style: 'destructive',
             onPress: async () => {
-              setFoods(parsed.foods || []);
-              setMeals(parsed.meals || []);
-              setRecipes(parsed.recipes || []);
+              const importedFoods = parsed.foods || [];
 
-              await AsyncStorage.setItem(STORAGE_KEYS.foods, JSON.stringify(parsed.foods || []));
-              await AsyncStorage.setItem(STORAGE_KEYS.meals, JSON.stringify(parsed.meals || []));
-              await AsyncStorage.setItem(STORAGE_KEYS.recipes, JSON.stringify(parsed.recipes || []));
+              const importedMeals = (parsed.meals || []).map((m) => {
+                const servingsEq = Number(m?.servings);
+                const safeServings =
+                  Number.isFinite(servingsEq) && servingsEq > 0 ? servingsEq : 1;
+
+                return {
+                  ...m,
+                  mode:
+                    m?.mode === 'grams' || m?.mode === 'units' || m?.mode === 'quantity'
+                      ? 'amount'
+                      : (m?.mode || 'servings'),
+                  amount: m?.amount != null ? m.amount : safeServings,
+                  servings: safeServings,
+                };
+              });
+
+              const importedRecipes = (parsed.recipes || []).map((r) => ({
+                ...r,
+                items: (r.items || []).map((it) => ({
+                  ...it,
+                  mode:
+                    it.mode === 'grams' || it.mode === 'units' || it.mode === 'quantity'
+                      ? 'amount'
+                      : (it.mode || 'servings'),
+                })),
+              }));
+
+              setFoods(importedFoods);
+              setMeals(importedMeals);
+              setRecipes(importedRecipes);
+
+              await AsyncStorage.setItem(STORAGE_KEYS.foods, JSON.stringify(importedFoods));
+              await AsyncStorage.setItem(STORAGE_KEYS.meals, JSON.stringify(importedMeals));
+              await AsyncStorage.setItem(STORAGE_KEYS.recipes, JSON.stringify(importedRecipes));
 
               Alert.alert('Success', 'Data imported successfully.');
             },
@@ -366,25 +449,46 @@ export default function App() {
         const mealsArr = Array.isArray(loadedMeals) ? loadedMeals : [];
         const recipesArr = Array.isArray(loadedRecipes) ? loadedRecipes : [];
 
-        // ✅ MIGRATE meals: ensure mode + amount exist for older entries
+        // MIGRATE meals: ensure mode + amount exist for older entries
         const migratedMeals = mealsArr.map((m) => {
-          // if already has mode+amount, keep it
-          if (m?.mode && m?.amount != null) return m;
-
           const servingsEq = Number(m?.servings);
           const safeServings = Number.isFinite(servingsEq) && servingsEq > 0 ? servingsEq : 1;
 
+          let normalizedMode = m?.mode || 'servings';
+          if (normalizedMode === 'grams' || normalizedMode === 'units' || normalizedMode === 'quantity') {
+            normalizedMode = 'amount';
+          }
+
+          const food = foodsArr.find(f => f.id === m.foodId);
+          const parsed = food ? extractServingAmount(food.servingSize) : null;
+
           return {
             ...m,
-            mode: 'servings',
-            amount: safeServings,
+            mode: normalizedMode,
+            amount: m?.amount != null ? m.amount : safeServings,
             servings: safeServings,
+            amountLabel: normalizedMode === 'amount' ? (m.amountLabel || parsed?.label || '') : '',
           };
         });
 
+        const migratedRecipes = recipesArr.map((r) => ({
+          ...r,
+          items: (r.items || []).map((it) => {
+            let normalizedMode = it.mode || 'servings';
+            if (normalizedMode === 'grams' || normalizedMode === 'units' || normalizedMode === 'quantity') {
+              normalizedMode = 'amount';
+            }
+
+            return {
+              ...it,
+              mode: normalizedMode,
+            };
+          }),
+        }));
+
         setFoods(foodsArr);
         setMeals(migratedMeals);
-        setRecipes(recipesArr);
+        setRecipes(migratedRecipes);
       } catch (error) {
         console.log('Error loading data:', error);
         setFoods([]);
@@ -497,23 +601,12 @@ export default function App() {
     const food = foods.find((f) => f.id === Number(selectedFoodId));
     if (!food) return;
 
-    if (mealInputMode === 'grams') {
-      const g = extractServingGrams(food.servingSize);
-      if (!g) {
+    if (mealInputMode === 'amount') {
+      const parsed = extractServingAmount(food.servingSize);
+      if (!parsed) {
         Alert.alert(
-          'Grams not supported for this item',
-          'This food’s serving size must include grams (e.g., "30g"). Edit the food or log by servings.'
-        );
-        return;
-      }
-    }
-
-    if (mealInputMode === 'quantity') {
-      const q = extractServingQuantity(food.servingSize);
-      if (!q) {
-        Alert.alert(
-          'Quantity not supported for this item',
-          'This food’s serving size must look like "10 chocolates" or "2 cookies". Edit the food or log by servings.'
+          'Amount not supported for this item',
+          'This food’s serving size must look like "240 ml", "30 g", "1 cup", "10 almonds", or "2 cookies". Edit the food or log by servings.'
         );
         return;
       }
@@ -525,6 +618,10 @@ export default function App() {
     const amountNum = parseFloat(String(mealAmount));
     if (!Number.isFinite(amountNum) || amountNum <= 0) return;
 
+    const parsedAmount = mealInputMode === 'amount'
+      ? extractServingAmount(food.servingSize)
+      : null;
+
     const meal = {
       id: Date.now(),
       date: selectedDate,
@@ -535,13 +632,9 @@ export default function App() {
 
       mode: mealInputMode,
       amount: amountNum,
-      quantityUnit:
-        mealInputMode === 'quantity'
-          ? extractServingQuantity(food.servingSize)?.quantityUnit || ''
-          : '',
+      amountLabel: mealInputMode === 'amount' ? parsedAmount?.label || '' : '',
 
       servings: servingsEq,
-
       calories: (food.calories || 0) * servingsEq,
       protein: (food.protein || 0) * servingsEq,
       carbs: (food.carbs || 0) * servingsEq,
@@ -604,32 +697,19 @@ export default function App() {
     if (!Number.isFinite(amountNum) || amountNum <= 0) {
       Alert.alert(
         'Invalid amount',
-        mode === 'grams'
-          ? 'Grams must be positive'
-          : mode === 'quantity'
-            ? 'Quantity must be positive'
-            : 'Servings must be positive'
+        mode === 'amount'
+          ? 'Amounts must be positive'
+          : 'Servings must be positive'
       );
       return;
     }
 
-    if (mode === 'grams') {
-      const g = extractServingGrams(food.servingSize);
-      if (!g) {
+    if (mode === 'amount') {
+      const parsed = extractServingAmount(food.servingSize);
+      if (!parsed) {
         Alert.alert(
-          'Grams not supported for this item',
-          'This food’s serving size must include grams (e.g., "30g"). Edit the food or log by servings.'
-        );
-        return;
-      }
-    }
-
-    if (mode === 'quantity') {
-      const q = extractServingQuantity(food.servingSize);
-      if (!q) {
-        Alert.alert(
-          'Quantity not supported for this item',
-          'This food’s serving size must look like "10 chocolates" or "2 cookies". Edit the food or log by servings.'
+          'Amount not supported',
+          'This food does not have a valid serving format.'
         );
         return;
       }
@@ -653,14 +733,12 @@ export default function App() {
             ...m,
             mealType: newMealType,
             date: finalDate,
-
-            // keep mode/amount but update amount field to what user typed
+            amountLabel:
+              mode === 'amount'
+                ? extractServingAmount(food.servingSize)?.label || ''
+                : '',
             mode,
             amount: amountNum,
-            quantityUnit:
-              mode === 'quantity'
-                ? extractServingQuantity(food.servingSize)?.quantityUnit || ''
-                : '',
             servings: servingsEq,
             calories: (food.calories || 0) * servingsEq,
             protein: (food.protein || 0) * servingsEq,
@@ -700,7 +778,7 @@ export default function App() {
     setRecipeFoodPickerId('');
     setRecipeFoodServings('1');
     setRecipeFoodQuantity('1');
-    setRecipeFoodGrams('100');
+    setRecipeFoodUnits('100');
   };
 
   const confirmDeleteRecipe = (recipeId) => {
@@ -733,57 +811,57 @@ export default function App() {
     setRecipeFoodServings('1');
     setRecipeFoodQuantity('1');
     setRecipeInputMode('servings');
-    setRecipeFoodGrams('100');
+    setRecipeFoodUnits('100');
     setRecipeYield('2'); // or '1' if you prefer
 
 
-  };
-
-  // Pull grams from a servingSize string like "18g" or "18 g"
-  const extractServingGrams = (servingSize) => {
-    if (!servingSize) return null;
-    const m = String(servingSize).toLowerCase().match(/([\d.]+)\s*g\b/);
-    if (!m) return null;
-    const g = parseFloat(m[1]);
-    return Number.isFinite(g) ? g : null;
   };
 
   const extractServingQuantity = (servingSize) => {
     if (!servingSize) return null;
 
     const text = String(servingSize).trim().toLowerCase();
+    const match = text.match(/^([\d.]+)\s+(.+)$/);
+    if (!match) return null;
 
-    // reject grams-style serving sizes
-    if (/[\d.]+\s*g\b/.test(text)) return null;
+    const qty = parseFloat(match[1]);
+    const rawUnit = match[2].trim();
+    const unit = normalizeUnit(rawUnit);
 
-    // case 1: "10 almonds"
-    let match = text.match(/^([\d.]+)\s+(.+)$/);
-    if (match) {
-      const qty = parseFloat(match[1]);
-      const unit = match[2].trim();
+    if (!Number.isFinite(qty) || qty <= 0) return null;
 
-      if (!Number.isFinite(qty) || qty <= 0) return null;
+    // reject measurable units, because those belong in "units" mode
+    if (MEASURABLE_UNITS.includes(unit)) return null;
 
+    return {
+      quantityPerServing: qty,
+      quantityUnit: rawUnit || 'item(s)',
+    };
+  };
+
+  const extractServingAmount = (servingSize) => {
+    const measurable = extractServingUnit(servingSize);
+    if (measurable) {
       return {
-        quantityPerServing: qty,
-        quantityUnit: unit || 'item(s)',
+        kind: 'measurable',
+        perServing: measurable.amountPerServing,
+        label: measurable.unit,
       };
     }
 
-    // case 2: just "10"
-    match = text.match(/^([\d.]+)$/);
-    if (match) {
-      const qty = parseFloat(match[1]);
-      if (!Number.isFinite(qty) || qty <= 0) return null;
-
+    const quantity = extractServingQuantity(servingSize);
+    if (quantity) {
       return {
-        quantityPerServing: qty,
-        quantityUnit: 'item(s)',
+        kind: 'count',
+        perServing: quantity.quantityPerServing,
+        label: quantity.quantityUnit,
       };
     }
 
     return null;
   };
+
+
 
   const toServingsFromInput = (food, mode, amountRaw) => {
     const amount = parseFloat(String(amountRaw));
@@ -791,23 +869,16 @@ export default function App() {
 
     if (mode === 'servings') return amount;
 
-    if (mode === 'grams') {
-      const perServingGrams = extractServingGrams(food.servingSize);
-      if (!Number.isFinite(perServingGrams) || perServingGrams <= 0) return NaN;
-      return amount / perServingGrams;
-    }
-
-    if (mode === 'quantity') {
-      const parsed = extractServingQuantity(food.servingSize);
-      if (!parsed || !Number.isFinite(parsed.quantityPerServing) || parsed.quantityPerServing <= 0) {
+    if (mode === 'amount') {
+      const parsed = extractServingAmount(food.servingSize);
+      if (!parsed || !Number.isFinite(parsed.perServing) || parsed.perServing <= 0) {
         return NaN;
       }
-      return amount / parsed.quantityPerServing;
+      return amount / parsed.perServing;
     }
 
     return NaN;
   };
-
 
   const addIngredientToBuilder = () => {
     const foodIdNum = Number(recipeFoodPickerId);
@@ -830,52 +901,32 @@ export default function App() {
         ...prev,
         { foodId: foodIdNum, mode: 'servings', amount: servingsNum },
       ]);
-    } else if (recipeInputMode === 'quantity') {
-      const quantityNum = parseFloat(recipeFoodQuantity);
-      if (!Number.isFinite(quantityNum) || quantityNum <= 0) {
-        Alert.alert('Invalid quantity', 'Quantity must be a positive number.');
+    } else {
+      const amountNum = parseFloat(recipeFoodUnits);
+      if (!Number.isFinite(amountNum) || amountNum <= 0) {
+        Alert.alert('Invalid amount', 'Amount must be a positive number.');
         return;
       }
 
-      const parsed = extractServingQuantity(food.servingSize);
+      const parsed = extractServingAmount(food.servingSize);
       if (!parsed) {
         Alert.alert(
-          'Quantity not supported for this item',
-          'This food’s serving size must look like "10 chocolates" or "2 cookies". Edit the food or add by servings.'
+          'Amount not supported for this item',
+          'This food’s serving size must look like "240 ml", "30 g", "1 cup", "10 almonds", or "2 cookies". Edit the food or add by servings.'
         );
         return;
       }
 
       setNewRecipeItems(prev => [
         ...prev,
-        { foodId: foodIdNum, mode: 'quantity', amount: quantityNum },
-      ]);
-    } else {
-      const gramsNum = parseFloat(recipeFoodGrams);
-      if (!Number.isFinite(gramsNum) || gramsNum <= 0) {
-        Alert.alert('Invalid grams', 'Grams must be a positive number.');
-        return;
-      }
-
-      const servingGrams = extractServingGrams(food.servingSize);
-      if (!servingGrams) {
-        Alert.alert(
-          'Grams not supported for this item',
-          'This food’s serving size is not in grams (e.g., "18g"). Edit the food serving size to include grams, or add by servings.'
-        );
-        return;
-      }
-
-      setNewRecipeItems(prev => [
-        ...prev,
-        { foodId: foodIdNum, mode: 'grams', amount: gramsNum },
+        { foodId: foodIdNum, mode: 'amount', amount: amountNum },
       ]);
     }
 
     setRecipeFoodPickerId('');
     setRecipeFoodServings('1');
     setRecipeFoodQuantity('1');
-    setRecipeFoodGrams('100');
+    setRecipeFoodUnits('100');
   };
 
 
@@ -913,26 +964,13 @@ export default function App() {
         return;
       }
 
-      // If grams mode, ensure food has grams-per-serving parsable
-      if (it.mode === 'grams') {
+      if (it.mode === 'amount') {
         const food = foods.find(f => f.id === Number(it.foodId));
-        const servingGrams = extractServingGrams(food?.servingSize);
-        if (!servingGrams) {
-          Alert.alert(
-            'Grams not supported for this item',
-            'This food’s serving size must include grams (e.g., "18g"). Edit it or use servings.'
-          );
-          return;
-        }
-      }
-
-      if (it.mode === 'quantity') {
-        const food = foods.find(f => f.id === Number(it.foodId));
-        const parsed = extractServingQuantity(food?.servingSize);
+        const parsed = extractServingAmount(food?.servingSize);
         if (!parsed) {
           Alert.alert(
-            'Quantity not supported for this item',
-            'This food’s serving size must look like "10 chocolates" or "2 cookies". Edit it or use servings.'
+            'Amount not supported',
+            'Serving size must be measurable or countable.'
           );
           return;
         }
@@ -972,47 +1010,31 @@ export default function App() {
 
 
   // Convert an ingredient entry into "servings" (number)
-  // Supports new format:  { mode: 'servings'|'grams', amount: number|string }
-  // Supports old format:  { servings: number|string }   (backward compatible)
   const toServings = (food, item) => {
     if (!food || !item) return NaN;
 
-    // ✅ NEW format
     if (item.mode === 'servings') {
       const amt = parseFloat(String(item.amount ?? ''));
       return Number.isFinite(amt) ? amt : NaN;
     }
 
-    if (item.mode === 'grams') {
-      const grams = parseFloat(String(item.amount ?? ''));
-      if (!Number.isFinite(grams) || grams <= 0) return NaN;
+    if (item.mode === 'amount') {
+      const rawAmount = parseFloat(String(item.amount ?? ''));
+      if (!Number.isFinite(rawAmount) || rawAmount <= 0) return NaN;
 
-      const perServingGrams = extractServingGrams(food.servingSize);
-      if (!Number.isFinite(perServingGrams) || perServingGrams <= 0) return NaN;
-
-      return grams / perServingGrams; // ✅ grams -> servings
-    }
-
-    if (item.mode === 'quantity') {
-      const qty = parseFloat(String(item.amount ?? ''));
-      if (!Number.isFinite(qty) || qty <= 0) return NaN;
-
-      const parsed = extractServingQuantity(food.servingSize);
-      if (!parsed || !Number.isFinite(parsed.quantityPerServing) || parsed.quantityPerServing <= 0) {
+      const parsed = extractServingAmount(food.servingSize);
+      if (!parsed || !Number.isFinite(parsed.perServing) || parsed.perServing <= 0) {
         return NaN;
       }
 
-      return qty / parsed.quantityPerServing;
+      return rawAmount / parsed.perServing;
     }
 
-    // ✅ OLD format fallback (backward compatibility)
-    // Some old saved recipes might still have `servings`
     if (item.servings != null) {
       const s = parseFloat(String(item.servings));
       return Number.isFinite(s) ? s : NaN;
     }
 
-    // If somehow mode missing but amount exists, assume servings
     if (item.amount != null) {
       const s = parseFloat(String(item.amount));
       return Number.isFinite(s) ? s : NaN;
@@ -1020,8 +1042,6 @@ export default function App() {
 
     return NaN;
   };
-
-
 
   const mealTypes = ['breakfast', 'lunch', 'dinner', 'snacks'];
 
@@ -1205,6 +1225,14 @@ export default function App() {
     </View>
   );
 
+  const selectedFood = foods.find((f) => f.id === Number(selectedFoodId));
+  const selectedFoodUnit =
+    extractServingUnit(selectedFood?.servingSize)?.unit || 'units';
+
+  const recipeSelectedFood = foods.find((f) => f.id === Number(recipeFoodPickerId));
+  const recipeSelectedUnit =
+    extractServingUnit(recipeSelectedFood?.servingSize)?.unit || 'units';
+
   return (
     <SafeAreaView style={styles.container}>
       <FlatList
@@ -1331,11 +1359,9 @@ export default function App() {
                           <View style={styles.mealInfo}>
                             <Text style={styles.mealName}>{meal.foodName}</Text>
                             <Text style={styles.mealDetails}>
-                              {displayMode === 'grams'
-                                ? `${displayAmount} g`
-                                : displayMode === 'quantity'
-                                  ? `${displayAmount} ${meal.quantityUnit || 'item(s)'}`
-                                  : `${displayAmount} serving(s)`
+                              {displayMode === 'amount'
+                                ? `${displayAmount} ${meal.amountLabel || 'units'}`
+                                : `${displayAmount} serving(s)`
                               } - {meal.calories.toFixed(0)} cal
                             </Text>
 
@@ -1790,20 +1816,11 @@ export default function App() {
                       </Pressable>
 
                       <Pressable
-                        onPress={() => setMealInputMode('quantity')}
-                        style={[styles.pickerButton, mealInputMode === 'quantity' && styles.pickerButtonActive]}
+                        onPress={() => setMealInputMode('amount')}
+                        style={[styles.pickerButton, mealInputMode === 'amount' && styles.pickerButtonActive]}
                       >
-                        <Text style={[styles.pickerButtonText, mealInputMode === 'quantity' && styles.pickerButtonTextActive]}>
-                          Quantity
-                        </Text>
-                      </Pressable>
-
-                      <Pressable
-                        onPress={() => setMealInputMode('grams')}
-                        style={[styles.pickerButton, mealInputMode === 'grams' && styles.pickerButtonActive]}
-                      >
-                        <Text style={[styles.pickerButtonText, mealInputMode === 'grams' && styles.pickerButtonTextActive]}>
-                          Grams
+                        <Text style={[styles.pickerButtonText, mealInputMode === 'amount' && styles.pickerButtonTextActive]}>
+                          Amount
                         </Text>
                       </Pressable>
                     </View>
@@ -1811,11 +1828,9 @@ export default function App() {
                     <TextInput
                       style={styles.input}
                       placeholder={
-                        mealInputMode === 'grams'
-                          ? 'Grams (e.g. 120)'
-                          : mealInputMode === 'quantity'
-                            ? 'Quantity (e.g. 5)'
-                            : 'Servings (e.g. 1, 0.5)'
+                        mealInputMode === 'amount'
+                          ? 'Amount (e.g. 58, 240, 5)'
+                          : 'Servings (e.g. 1, 0.5)'
                       }
                       placeholderTextColor="#6b7280"
                       value={mealAmount}
@@ -1887,21 +1902,17 @@ export default function App() {
                               <View style={{ flex: 1 }}>
                                 <Text style={styles.mealName}>
                                   {food ? food.name : 'Missing food'} • {
-                                    it.mode === 'grams'
-                                      ? `${it.amount} g`
-                                      : it.mode === 'quantity'
-                                        ? `${it.amount} ${extractServingQuantity(food?.servingSize)?.quantityUnit || 'item(s)'}`
-                                        : `${it.amount} serving(s)`
+                                    it.mode === 'amount'
+                                      ? `${it.amount} ${extractServingAmount(food?.servingSize)?.label || 'units'}`
+                                      : `${it.amount} serving(s)`
                                   }
                                 </Text>
 
                                 <Text style={styles.recipeMeta}>
                                   {
-                                    it.mode === 'grams'
-                                      ? `${it.amount} g`
-                                      : it.mode === 'quantity'
-                                        ? `${it.amount} ${extractServingQuantity(food?.servingSize)?.quantityUnit || 'item(s)'}`
-                                        : `${it.amount} serving(s)`
+                                    it.mode === 'amount'
+                                      ? `${it.amount} ${extractServingAmount(food?.servingSize)?.label || 'units'}`
+                                      : `${it.amount} serving(s)`
                                   } • 1 serving = {food?.servingSize || '—'}
                                 </Text>
 
@@ -1917,11 +1928,9 @@ export default function App() {
                                   }
                                   keyboardType="decimal-pad"
                                   placeholder={
-                                    it.mode === 'grams'
-                                      ? 'Grams'
-                                      : it.mode === 'quantity'
-                                        ? 'Quantity'
-                                        : 'Servings'
+                                    it.mode === 'amount'
+                                      ? 'Amount'
+                                      : 'Servings'
                                   }
                                   placeholderTextColor="#6b7280"
                                 />
@@ -2048,20 +2057,11 @@ export default function App() {
                   </Pressable>
 
                   <Pressable
-                    onPress={() => setRecipeInputMode('quantity')}
-                    style={[styles.pickerButton, recipeInputMode === 'quantity' && styles.pickerButtonActive]}
+                    onPress={() => setRecipeInputMode('amount')}
+                    style={[styles.pickerButton, recipeInputMode === 'amount' && styles.pickerButtonActive]}
                   >
-                    <Text style={[styles.pickerButtonText, recipeInputMode === 'quantity' && styles.pickerButtonTextActive]}>
-                      Quantity
-                    </Text>
-                  </Pressable>
-
-                  <Pressable
-                    onPress={() => setRecipeInputMode('grams')}
-                    style={[styles.pickerButton, recipeInputMode === 'grams' && styles.pickerButtonActive]}
-                  >
-                    <Text style={[styles.pickerButtonText, recipeInputMode === 'grams' && styles.pickerButtonTextActive]}>
-                      Grams
+                    <Text style={[styles.pickerButtonText, recipeInputMode === 'amount' && styles.pickerButtonTextActive]}>
+                      Amount
                     </Text>
                   </Pressable>
                 </View>
@@ -2075,22 +2075,13 @@ export default function App() {
                     onChangeText={setRecipeFoodServings}
                     keyboardType="decimal-pad"
                   />
-                ) : recipeInputMode === 'quantity' ? (
-                  <TextInput
-                    style={styles.input}
-                    placeholder="Quantity (e.g. 5)"
-                    placeholderTextColor="#6b7280"
-                    value={recipeFoodQuantity}
-                    onChangeText={setRecipeFoodQuantity}
-                    keyboardType="decimal-pad"
-                  />
                 ) : (
                   <TextInput
                     style={styles.input}
-                    placeholder="Grams (e.g. 100)"
+                    placeholder={`${recipeSelectedUnit} (e.g. 100)`}
                     placeholderTextColor="#6b7280"
-                    value={recipeFoodGrams}
-                    onChangeText={setRecipeFoodGrams}
+                    value={recipeFoodUnits}
+                    onChangeText={setRecipeFoodUnits}
                     keyboardType="decimal-pad"
                   />
                 )}
@@ -2114,21 +2105,17 @@ export default function App() {
                         <View style={{ flex: 1 }}>
                           <Text style={styles.mealName}>
                             {food ? food.name : 'Missing food'} • {
-                              it.mode === 'grams'
-                                ? `${it.amount} g`
-                                : it.mode === 'quantity'
-                                  ? `${it.amount} ${extractServingQuantity(food?.servingSize)?.quantityUnit || 'item(s)'}`
-                                  : `${it.amount} serving(s)`
+                              it.mode === 'amount'
+                                ? `${it.amount} ${extractServingAmount(food?.servingSize)?.label || 'units'}`
+                                : `${it.amount} serving(s)`
                             }
                           </Text>
 
                           <Text style={styles.recipeMeta}>
                             {
-                              it.mode === 'grams'
-                                ? `${it.amount} g`
-                                : it.mode === 'quantity'
-                                  ? `${it.amount} ${extractServingQuantity(food?.servingSize)?.quantityUnit || 'item(s)'}`
-                                  : `${it.amount} serving(s)`
+                              it.mode === 'amount'
+                                ? `${it.amount} ${extractServingAmount(food?.servingSize)?.label || 'units'}`
+                                : `${it.amount} serving(s)`
                             } • 1 serving = {food?.servingSize || '—'}
                           </Text>
 
@@ -2142,11 +2129,9 @@ export default function App() {
                             }
                             keyboardType="decimal-pad"
                             placeholder={
-                              it.mode === 'grams'
-                                ? 'Grams'
-                                : it.mode === 'quantity'
-                                  ? 'Quantity'
-                                  : 'Servings'
+                              it.mode === 'amount'
+                                ? 'Amount'
+                                : 'Servings'
                             }
                             placeholderTextColor="#6b7280"
                           />
@@ -2251,11 +2236,9 @@ export default function App() {
             </Text>
 
             <Text style={{ marginTop: 16, marginBottom: 6, color: '#374151', fontWeight: '600' }}>
-              {swapMeal?.mode === 'grams'
-                ? 'Grams'
-                : swapMeal?.mode === 'quantity'
-                  ? 'Quantity'
-                  : 'Servings'}
+              {swapMeal?.mode === 'amount'
+                ? (swapMeal?.amountLabel || 'amount')
+                : 'Servings'}
             </Text>
 
             <TextInput
@@ -2264,11 +2247,9 @@ export default function App() {
               onChangeText={setSwapServings}
               keyboardType="decimal-pad"
               placeholder={
-                swapMeal?.mode === 'grams'
-                  ? 'e.g. 120'
-                  : swapMeal?.mode === 'quantity'
-                    ? 'e.g. 5'
-                    : 'e.g. 1, 0.5, 2'
+                swapMeal?.mode === 'amount'
+                  ? (swapMeal?.amountLabel || 'amount')
+                  : 'Servings'
               }
               placeholderTextColor="#6b7280"
             />
