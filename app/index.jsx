@@ -74,7 +74,10 @@ export default function App() {
   const [mealAmount, setMealAmount] = useState('1'); // user input (servings or units)
 
   const [recipePortionsEaten, setRecipePortionsEaten] = useState('1');
-  const [recipeFoodQuantity, setRecipeFoodQuantity] = useState('1');
+  const [recipeLogMode, setRecipeLogMode] = useState('portions'); // 'portions' | 'weight'
+  const [recipeLoggedWeight, setRecipeLoggedWeight] = useState('');
+  const [recipeFinalWeight, setRecipeFinalWeight] = useState('');
+  const [recipeIngredientSearch, setRecipeIngredientSearch] = useState('');
 
   const [showWeeklyStats, setShowWeeklyStats] = useState(false);
 
@@ -117,6 +120,8 @@ export default function App() {
     setSelectedRecipeId(String(recipe.id));
     setRecipePortionsEaten('1');
     setRecipeSearch('');
+    setRecipeLogMode('portions');
+    setRecipeLoggedWeight('');
 
     setRecipeDraftItems(
       recipe.items.map(it => ({
@@ -190,16 +195,34 @@ export default function App() {
     const recipe = recipes.find(r => r.id === Number(selectedRecipeId));
     if (!recipe) return;
 
-    const yieldNum = Number(recipe.yield ?? 1);
-    const eatenNum = parseFloat(recipePortionsEaten);
+    let portionFactor = NaN;
 
-    if (!Number.isFinite(eatenNum) || eatenNum <= 0) return;
-    if (!Number.isFinite(yieldNum) || yieldNum <= 0) return;
+    if (recipeLogMode === 'weight') {
+      const loggedWeightNum = parseFloat(recipeLoggedWeight);
+      const finalWeightNum = Number(recipe.finalWeight);
 
-    const portionFactor = eatenNum / yieldNum;
+      if (!Number.isFinite(loggedWeightNum) || loggedWeightNum <= 0) return;
+      if (!Number.isFinite(finalWeightNum) || finalWeightNum <= 0) {
+        Alert.alert(
+          'Recipe weight not available',
+          'This recipe does not have a final weight saved.'
+        );
+        return;
+      }
 
+      portionFactor = loggedWeightNum / finalWeightNum;
+    } else {
+      const yieldNum = Number(recipe.yield ?? 1);
+      const eatenNum = parseFloat(recipePortionsEaten);
 
-    // one id to group all rows created from this logging action
+      if (!Number.isFinite(eatenNum) || eatenNum <= 0) return;
+      if (!Number.isFinite(yieldNum) || yieldNum <= 0) return;
+
+      portionFactor = eatenNum / yieldNum;
+    }
+
+    if (!Number.isFinite(portionFactor) || portionFactor <= 0) return;
+
     const recipeInstanceId = Date.now();
 
     const recipeMeta = {
@@ -207,12 +230,16 @@ export default function App() {
       recipeId: recipe.id,
       recipeName: recipe.name,
       recipeInstanceId,
-      recipeYield: yieldNum,
-      recipePortionsEaten: eatenNum,
+      recipeYield: Number(recipe.yield ?? 1),
+      recipePortionsEaten:
+        recipeLogMode === 'portions' ? parseFloat(recipePortionsEaten) : null,
+      loggedRecipeWeight:
+        recipeLogMode === 'weight' ? parseFloat(recipeLoggedWeight) : null,
+      recipeFinalWeight:
+        recipeLogMode === 'weight' ? Number(recipe.finalWeight) : null,
+      recipeLogMode,
       portionFactor,
     };
-
-
 
     const rows = recipeDraftItems
       .map((it) => {
@@ -225,42 +252,39 @@ export default function App() {
         const scaledServingsEq = servingsEq * portionFactor;
 
         const rawAmt = parseFloat(String(it.amount));
-        const scaledAmount = Number.isFinite(rawAmt) ? rawAmt * portionFactor : scaledServingsEq;
+        const scaledAmount = Number.isFinite(rawAmt)
+          ? rawAmt * portionFactor
+          : scaledServingsEq;
 
         return buildMealRowFromFood(
           food,
-          scaledServingsEq,      // ✅ macros use eaten fraction
+          scaledServingsEq,
           selectedDate,
           mealType,
           recipeMeta,
           it.mode,
-          scaledAmount           // ✅ UI shows eaten fraction (e.g., 50g)
+          scaledAmount
         );
       })
       .filter(Boolean);
 
-
     if (rows.length === 0) return;
 
     setMeals(prev => [...prev, ...rows]);
-
-    // close modal + reset
     setShowAddMeal(false);
 
-    // reset food-mode state
     setSelectedFoodId('');
     setMealInputMode('servings');
     setMealAmount('1');
 
-    // reset recipe-mode state
     setSelectedRecipeId('');
     setRecipeDraftItems([]);
     setRecipePortionsEaten('1');
+    setRecipeLogMode('portions');
+    setRecipeLoggedWeight('');
 
     setLogMode('food');
     setFoodSearch('');
-
-
   };
 
 
@@ -468,11 +492,22 @@ export default function App() {
             amount: m?.amount != null ? m.amount : safeServings,
             servings: safeServings,
             amountLabel: normalizedMode === 'amount' ? (m.amountLabel || parsed?.label || '') : '',
+            calories: Number(m?.calories) || 0,
+            protein: Number(m?.protein) || 0,
+            carbs: Number(m?.carbs) || 0,
+            fats: Number(m?.fats) || 0,
+            sugar: Number(m?.sugar) || 0,
+            addedSugar: Number(m?.addedSugar) || 0,
+            sodium: Number(m?.sodium) || 0,
+            fiber: Number(m?.fiber) || 0,
           };
         });
 
         const migratedRecipes = recipesArr.map((r) => ({
           ...r,
+          finalWeight: Number.isFinite(Number(r.finalWeight))
+            ? Number(r.finalWeight)
+            : '',
           items: (r.items || []).map((it) => {
             let normalizedMode = it.mode || 'servings';
             if (normalizedMode === 'grams' || normalizedMode === 'units' || normalizedMode === 'quantity') {
@@ -779,6 +814,7 @@ export default function App() {
     setRecipeFoodServings('1');
     setRecipeFoodQuantity('1');
     setRecipeFoodUnits('100');
+    setRecipeFinalWeight(String(r.finalWeight ?? ''));
   };
 
   const confirmDeleteRecipe = (recipeId) => {
@@ -813,8 +849,10 @@ export default function App() {
     setRecipeInputMode('servings');
     setRecipeFoodUnits('100');
     setRecipeYield('2'); // or '1' if you prefer
-
-
+    setRecipeFinalWeight('');
+    setRecipeLogMode('portions');
+    setRecipeLoggedWeight('');
+    setRecipeIngredientSearch('');
   };
 
   const extractServingQuantity = (servingSize) => {
@@ -927,6 +965,7 @@ export default function App() {
     setRecipeFoodServings('1');
     setRecipeFoodQuantity('1');
     setRecipeFoodUnits('100');
+    setRecipeIngredientSearch('');
   };
 
 
@@ -949,6 +988,8 @@ export default function App() {
       return;
     }
 
+    const finalWeightNum = parseFloat(recipeFinalWeight);
+    const hasFinalWeight = Number.isFinite(finalWeightNum) && finalWeightNum > 0;
 
     // validate items
     for (const it of newRecipeItems) {
@@ -980,6 +1021,7 @@ export default function App() {
     const payload = {
       name,
       yield: yieldNum,
+      finalWeight: hasFinalWeight ? finalWeightNum : null,
       items: newRecipeItems.map((it) => ({
         foodId: Number(it.foodId),
         mode: it.mode || 'servings',
@@ -1044,6 +1086,23 @@ export default function App() {
   };
 
   const mealTypes = ['breakfast', 'lunch', 'dinner', 'snacks'];
+
+  const filteredRecipeFoods = useMemo(() => {
+    const q = recipeIngredientSearch.trim().toLowerCase();
+    if (!q) return foods;
+
+    return foods.filter((f) => {
+      const name = String(f.name || '').toLowerCase();
+      const serving = String(f.servingSize || '').toLowerCase();
+      return name.includes(q) || serving.includes(q);
+    });
+  }, [foods, recipeIngredientSearch]);
+
+  const selectedRecipe = recipes.find((r) => r.id === Number(selectedRecipeId));
+
+  const selectedRecipeHasWeight =
+    Number.isFinite(Number(selectedRecipe?.finalWeight)) &&
+    Number(selectedRecipe?.finalWeight) > 0;
 
   const filteredFoods = useMemo(() => {
     const q = foodSearch.trim().toLowerCase();
@@ -1359,10 +1418,18 @@ export default function App() {
                           <View style={styles.mealInfo}>
                             <Text style={styles.mealName}>{meal.foodName}</Text>
                             <Text style={styles.mealDetails}>
-                              {displayMode === 'amount'
-                                ? `${displayAmount} ${meal.amountLabel || 'units'}`
-                                : `${displayAmount} serving(s)`
-                              } - {meal.calories.toFixed(0)} cal
+                              {meal.fromRecipe
+                                ? (
+                                  displayMode === 'amount'
+                                    ? `${displayAmount.toFixed(0)} ${meal.amountLabel || 'units'}`
+                                    : `${displayAmount.toFixed(1)} serving(s)`
+                                ) + `${meal.recipeName ? ` • from ${meal.recipeName}` : ''}`
+                                : (
+                                  displayMode === 'amount'
+                                    ? `${displayAmount.toFixed(0)} ${meal.amountLabel || 'units'}`
+                                    : `${displayAmount.toFixed(1)} serving(s)`
+                                )
+                              } - {Number(meal.calories || 0).toFixed(0)} cal
                             </Text>
 
                           </View>
@@ -1433,6 +1500,9 @@ export default function App() {
                         <Text style={styles.recipeName}>{r.name}</Text>
                         <Text style={styles.recipeMeta}>
                           {r.items?.length ?? 0} ingredient(s)
+                          {Number.isFinite(Number(r.finalWeight)) && Number(r.finalWeight) > 0
+                            ? ` • ${r.finalWeight} g total`
+                            : ''}
                         </Text>
                       </View>
 
@@ -1845,16 +1915,73 @@ export default function App() {
                 {/* ---------- RECIPE MODE ---------- */}
                 {logMode === 'recipe' && (
                   <>
-                    <Text style={[styles.pickerLabel, { marginTop: 12 }]}>Portions Eaten</Text>
+                    <View style={styles.pickerButtons}>
+                      <Pressable
+                        onPress={() => setRecipeLogMode('portions')}
+                        style={[
+                          styles.pickerButton,
+                          recipeLogMode === 'portions' && styles.pickerButtonActive,
+                        ]}
+                      >
+                        <Text
+                          style={[
+                            styles.pickerButtonText,
+                            recipeLogMode === 'portions' && styles.pickerButtonTextActive,
+                          ]}
+                        >
+                          Portions
+                        </Text>
+                      </Pressable>
+                      <Pressable
+                        onPress={() => {
+                          if (selectedRecipeHasWeight) setRecipeLogMode('weight');
+                        }}
+                        style={[
+                          styles.pickerButton,
+                          recipeLogMode === 'weight' && styles.pickerButtonActive,
+                          !selectedRecipeHasWeight && { opacity: 0.5 },
+                        ]}
+                      >
+                        <Text
+                          style={[
+                            styles.pickerButtonText,
+                            recipeLogMode === 'weight' && styles.pickerButtonTextActive,
+                          ]}
+                        >
+                          Weight
+                        </Text>
+                      </Pressable>
+                    </View>
 
-                    <TextInput
-                      style={styles.input}
-                      placeholder="Portions eaten"
-                      placeholderTextColor="#6b7280"
-                      value={recipePortionsEaten}
-                      onChangeText={setRecipePortionsEaten}
-                      keyboardType="decimal-pad"
-                    />
+                    {recipeLogMode === 'weight' ? (
+                      <>
+                        <Text style={[styles.pickerLabel, { marginTop: 12 }]}>
+                          Weight Eaten (g)
+                        </Text>
+
+                        <TextInput
+                          style={styles.input}
+                          placeholder="e.g. 150"
+                          value={recipeLoggedWeight}
+                          onChangeText={setRecipeLoggedWeight}
+                          keyboardType="decimal-pad"
+                        />
+                      </>
+                    ) : (
+                      <>
+                        <Text style={[styles.pickerLabel, { marginTop: 12 }]}>
+                          Portions Eaten
+                        </Text>
+
+                        <TextInput
+                          style={styles.input}
+                          placeholder="e.g. 1.5"
+                          value={recipePortionsEaten}
+                          onChangeText={setRecipePortionsEaten}
+                          keyboardType="decimal-pad"
+                        />
+                      </>
+                    )}
 
                     <View style={styles.pickerContainer}>
                       <Text style={styles.pickerLabel}>Select Recipe</Text>
@@ -2011,8 +2138,16 @@ export default function App() {
 
 
               <View style={{ gap: 10 }}>
+                <TextInput
+                  style={styles.searchInput}
+                  placeholder="Search ingredients…"
+                  placeholderTextColor="#6b7280"
+                  value={recipeIngredientSearch}
+                  onChangeText={setRecipeIngredientSearch}
+                />
+
                 <ScrollView style={styles.foodSelector} keyboardShouldPersistTaps="handled">
-                  {foods.map((food) => (
+                  {filteredRecipeFoods.map((food) => (
                     <Pressable
                       key={food.id}
                       onPress={() => setRecipeFoodPickerId(String(food.id))}
@@ -2043,6 +2178,19 @@ export default function App() {
                   placeholderTextColor="#6b7280"
                   value={recipeYield}
                   onChangeText={setRecipeYield}
+                  keyboardType="decimal-pad"
+                />
+
+                <Text style={[styles.pickerLabel, { marginTop: 12 }]}>
+                  Final recipe weight
+                </Text>
+
+                <TextInput
+                  style={styles.input}
+                  placeholder="Final cooked weight (e.g. 580)"
+                  placeholderTextColor="#6b7280"
+                  value={recipeFinalWeight}
+                  onChangeText={setRecipeFinalWeight}
                   keyboardType="decimal-pad"
                 />
 
