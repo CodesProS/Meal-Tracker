@@ -7,6 +7,7 @@ import {
   collection,
   deleteDoc,
   doc,
+  getDocs,
   onSnapshot,
   setDoc,
   updateDoc,
@@ -33,6 +34,7 @@ import { db } from '../lib/firebase';
 
 // ─── AsyncStorage keys (profile only — data lives in Firestore) ───────────────
 const PROFILE_KEY = 'userProfile';
+const FAMILY_ID = 'VTDKMC'; // single-user for now; keeps existing Firestore data path
 
 function safeJsonParse(value, fallback) {
   try {
@@ -164,19 +166,10 @@ const FoodItem = React.memo(function FoodItem({
 });
 
 export default function App() {
-  // ─── Profile / family state ──────────────────────────────────────────────
+  // ─── Profile state (single user) ──────────────────────────────────────────────
   const [userId, setUserId] = useState(null);
   const [familyId, setFamilyId] = useState(null);
   const [userName, setUserName] = useState('');
-  const [familyMembers, setFamilyMembers] = useState([]);
-  const [viewingUserId, setViewingUserId] = useState(null);
-
-  // first-launch setup modal
-  const [showSetup, setShowSetup] = useState(false);
-  const [setupName, setSetupName] = useState('');
-  const [setupMode, setSetupMode] = useState('create'); // 'create' | 'join'
-  const [setupCode, setSetupCode] = useState('');
-  const [setupLoading, setSetupLoading] = useState(false);
 
   // ─── Refs so async callbacks (setTimeout, Alert.onPress) always see latest values ──
   const actionGuard = useRef(false);   // prevents double-press on any primary action
@@ -227,7 +220,6 @@ export default function App() {
   const [bulkAction, setBulkAction] = useState('move');         // 'move' | 'copy'
   const [bulkTargetDate, setBulkTargetDate] = useState('');
   const [bulkTargetType, setBulkTargetType] = useState('');     // '' = keep same type
-  const [bulkTargetUserId, setBulkTargetUserId] = useState(''); // '' = same user
 
   // ─── Recipe instance expand/collapse in daily log ─────────────────────────
   const [expandedRecipeInstances, setExpandedRecipeInstances] = useState(new Set());
@@ -277,10 +269,9 @@ export default function App() {
   const [selectedFoodId, setSelectedFoodId] = useState('');
 
   // ─── Derived data ────────────────────────────────────────────────────────
-  const isViewingOwn = viewingUserId === userId;
   const meals = useMemo(
-    () => allMeals.filter(m => m.userId === viewingUserId),
-    [allMeals, viewingUserId]
+    () => allMeals.filter(m => m.userId === userId),
+    [allMeals, userId]
   );
   // All family recipes are shared — any member can see and log them.
   // Edit/delete is restricted to the creator (r.userId === userId) in the UI.
@@ -430,76 +421,30 @@ export default function App() {
   const recipesCol = (fId) => collection(db, 'families', fId, 'recipes');
   const membersCol = (fId) => collection(db, 'families', fId, 'members');
 
-  // ─── Profile setup ────────────────────────────────────────────────────────
-  const handleCreateFamily = async () => {
-    const name = setupName.trim();
-    if (!name) { Alert.alert('Name required', 'Please enter your name.'); return; }
-    setSetupLoading(true);
-    try {
-      const newFamilyId = generateId(6);
-      const newUserId = `${Date.now()}_${generateId(4)}`;
-      const profile = { userId: newUserId, familyId: newFamilyId, userName: name };
-      await AsyncStorage.setItem(PROFILE_KEY, JSON.stringify(profile));
-      await setDoc(doc(membersCol(newFamilyId), newUserId), {
-        userId: newUserId, name, joinedAt: Date.now(),
-      });
-      setUserId(newUserId);
-      setFamilyId(newFamilyId);
-      setUserName(name);
-      setViewingUserId(newUserId);
-      setShowSetup(false);
-    } catch (e) {
-      Alert.alert('Error', 'Could not create family. Check your Firebase config.');
-      console.error(e);
-    } finally {
-      setSetupLoading(false);
-    }
-  };
-
-  const handleJoinFamily = async () => {
-    const name = setupName.trim();
-    const code = setupCode.trim().toUpperCase();
-    if (!name) { Alert.alert('Name required', 'Please enter your name.'); return; }
-    if (code.length < 4) { Alert.alert('Code required', 'Enter the family code shared with you.'); return; }
-    setSetupLoading(true);
-    try {
-      const newUserId = `${Date.now()}_${generateId(4)}`;
-      const profile = { userId: newUserId, familyId: code, userName: name };
-      await AsyncStorage.setItem(PROFILE_KEY, JSON.stringify(profile));
-      await setDoc(doc(membersCol(code), newUserId), {
-        userId: newUserId, name, joinedAt: Date.now(),
-      });
-      setUserId(newUserId);
-      setFamilyId(code);
-      setUserName(name);
-      setViewingUserId(newUserId);
-      setShowSetup(false);
-    } catch (e) {
-      Alert.alert('Error', 'Could not join family. Check the code and your Firebase config.');
-      console.error(e);
-    } finally {
-      setSetupLoading(false);
-    }
-  };
-
   // ─── Load profile + subscribe to Firestore ────────────────────────────────
   useEffect(() => {
     (async () => {
       try {
         const raw = await AsyncStorage.getItem(PROFILE_KEY);
         const profile = safeJsonParse(raw, null);
-        if (!profile?.userId || !profile?.familyId) {
-          setShowSetup(true);
-          setHydrated(true);
+        if (profile?.userId) {
+          setUserId(profile.userId);
+          setUserName(profile.userName || '');
+          setFamilyId(FAMILY_ID);
           return;
         }
-        setUserId(profile.userId);
-        setFamilyId(profile.familyId);
-        setUserName(profile.userName || '');
-        setViewingUserId(profile.userId);
+        // No local profile (fresh install): adopt the earliest existing member
+        // so previously logged data stays attached, else create one.
+        const snap = await getDocs(membersCol(FAMILY_ID));
+        const existing = snap.docs.map(d => d.data()).sort((a, b) => (a.joinedAt || 0) - (b.joinedAt || 0))[0];
+        const me = existing ?? { userId: `${Date.now()}_${generateId(4)}`, name: 'Me', joinedAt: Date.now() };
+        if (!existing) await setDoc(doc(membersCol(FAMILY_ID), me.userId), me);
+        await AsyncStorage.setItem(PROFILE_KEY, JSON.stringify({ userId: me.userId, familyId: FAMILY_ID, userName: me.name }));
+        setUserId(me.userId);
+        setUserName(me.name || '');
+        setFamilyId(FAMILY_ID);
       } catch (e) {
         console.error('Profile load error:', e);
-        setShowSetup(true);
       } finally {
         setHydrated(true);
       }
@@ -526,7 +471,6 @@ export default function App() {
 
     const unsubMembers = onSnapshot(membersCol(familyId), (snap) => {
       const members = snap.docs.map(d => ({ ...d.data() }));
-      setFamilyMembers(members);
       const me = members.find(m => m.userId === userIdRef.current);
       if (me?.targets) setUserTargets(t => ({ ...DEFAULT_TARGETS, ...me.targets }));
     });
@@ -720,11 +664,6 @@ export default function App() {
 
   const handleBulkTransfer = async () => {
     // Use state directly — this function is recreated every render so closures are fresh.
-    const targetMember = bulkTargetUserId
-      ? familyMembers.find(m => m.userId === bulkTargetUserId)
-      : null;
-    const crossUser = targetMember && targetMember.userId !== userId;
-
     const sourceMeals = allMeals.filter(m =>
       m.userId === userId &&
       m.date === selectedDate &&
@@ -735,8 +674,7 @@ export default function App() {
       return;
     }
     const targetDate = bulkTargetDate || selectedDate;
-    // Cross-user transfers are always copies — you can't "move" a meal to someone else
-    const isCopy = bulkAction === 'copy' || crossUser;
+    const isCopy = bulkAction === 'copy';
     const baseId = Date.now();
 
     // Build new meal objects
@@ -745,13 +683,6 @@ export default function App() {
       id: isCopy ? baseId + i : m.id,
       date: targetDate,
       mealType: bulkTargetType || m.mealType,
-      // Cross-user: reassign ownership; stamp new recipeInstanceId so recipe
-      // groups are independent in the recipient's log
-      ...(crossUser ? {
-        userId: targetMember.userId,
-        userName: targetMember.name,
-        recipeInstanceId: m.recipeInstanceId ? baseId + m.recipeInstanceId : undefined,
-      } : {}),
     }));
 
     // Optimistic update
@@ -1831,81 +1762,6 @@ export default function App() {
   return (
     <SafeAreaView style={styles.container}>
 
-      {/* ── First-launch setup modal ── */}
-      <Modal visible={showSetup} animationType="fade" transparent={false}>
-        <SafeAreaView style={{ flex: 1, backgroundColor: '#f0f9ff' }}>
-          <KeyboardAvoidingView
-            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-            style={{ flex: 1, justifyContent: 'center', padding: 24 }}
-          >
-            <Text style={[styles.title, { marginBottom: 8 }]}>Welcome to{'\n'}Meal Tracker</Text>
-            <Text style={{ color: '#6b7280', textAlign: 'center', marginBottom: 32 }}>
-              Set up your profile to get started
-            </Text>
-
-            <TextInput
-              style={styles.input}
-              placeholder="Your name (e.g. Soham, Mom, Dad)"
-              placeholderTextColor="#6b7280"
-              value={setupName}
-              onChangeText={setSetupName}
-              autoFocus
-            />
-
-            <View style={[styles.pickerButtons, { marginVertical: 16 }]}>
-              <Pressable
-                onPress={() => setSetupMode('create')}
-                style={[styles.pickerButton, { flex: 1, justifyContent: 'center' }, setupMode === 'create' && styles.pickerButtonActive]}
-              >
-                <Text style={[styles.pickerButtonText, setupMode === 'create' && styles.pickerButtonTextActive]}>
-                  Create family
-                </Text>
-              </Pressable>
-              <Pressable
-                onPress={() => setSetupMode('join')}
-                style={[styles.pickerButton, { flex: 1, justifyContent: 'center' }, setupMode === 'join' && styles.pickerButtonActive]}
-              >
-                <Text style={[styles.pickerButtonText, setupMode === 'join' && styles.pickerButtonTextActive]}>
-                  Join family
-                </Text>
-              </Pressable>
-            </View>
-
-            {setupMode === 'join' && (
-              <TextInput
-                style={[styles.input, { marginBottom: 12 }]}
-                placeholder="Family code (e.g. ABC123)"
-                placeholderTextColor="#6b7280"
-                value={setupCode}
-                onChangeText={setSetupCode}
-                autoCapitalize="characters"
-                autoCorrect={false}
-              />
-            )}
-
-            {setupMode === 'create' ? (
-              <Text style={{ color: '#6b7280', fontSize: 13, marginBottom: 16, textAlign: 'center' }}>
-                You'll get a family code to share with your parents after setup.
-              </Text>
-            ) : (
-              <Text style={{ color: '#6b7280', fontSize: 13, marginBottom: 16, textAlign: 'center' }}>
-                Enter the family code your family member shared with you.
-              </Text>
-            )}
-
-            <Pressable
-              onPress={setupMode === 'create' ? handleCreateFamily : handleJoinFamily}
-              disabled={setupLoading}
-              style={[styles.addButton, { justifyContent: 'center', paddingVertical: 14, opacity: setupLoading ? 0.6 : 1 }]}
-            >
-              <Text style={styles.addButtonText}>
-                {setupLoading ? 'Setting up…' : setupMode === 'create' ? 'Create Family' : 'Join Family'}
-              </Text>
-            </Pressable>
-          </KeyboardAvoidingView>
-        </SafeAreaView>
-      </Modal>
-
       <FlatList
         data={filteredFoods}
         renderItem={renderFoodItem}
@@ -1917,7 +1773,7 @@ export default function App() {
           <>
             <Text style={styles.title}>Meal Tracker</Text>
 
-            {/* Family info + export/import + targets */}
+            {/* Export/import + targets */}
             <View style={styles.topActions}>
               <Pressable
                 onPress={() => { setDraftTargets({ ...userTargets }); setShowSetTargets(true); }}
@@ -1936,58 +1792,17 @@ export default function App() {
               </Pressable>
             </View>
 
-            {/* Family code banner + sync status */}
+            {/* Sync status */}
             {familyId && (
               <View style={styles.familyBanner}>
-                <Ionicons name="people-outline" size={16} color="#4f46e5" />
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.familyBannerText}>
-                    Family: <Text style={{ fontWeight: '800' }}>{familyId}</Text>
-                    {'  '}·{'  '}You: <Text style={{ fontWeight: '700' }}>{userName}</Text>
-                  </Text>
-                  <Text style={styles.syncBadgeText}>
-                    🟢 Live sync · {foods.length} foods · {allMeals.filter(m => m.userId === userId).length} meals · {allRecipes.filter(r => r.userId === userId).length} recipes
-                  </Text>
-                </View>
-              </View>
-            )}
-
-            {/* Family member switcher */}
-            {familyMembers.length > 1 && (
-              <View style={styles.memberBar}>
-                <Text style={styles.memberBarLabel}>Viewing:</Text>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0 }}>
-                  {familyMembers.map(member => (
-                    <Pressable
-                      key={member.userId}
-                      onPress={() => setViewingUserId(member.userId)}
-                      style={[
-                        styles.memberChip,
-                        viewingUserId === member.userId && styles.memberChipActive,
-                      ]}
-                    >
-                      <Text style={[
-                        styles.memberChipText,
-                        viewingUserId === member.userId && styles.memberChipTextActive,
-                      ]}>
-                        {member.name}{member.userId === userId ? ' (you)' : ''}
-                      </Text>
-                    </Pressable>
-                  ))}
-                </ScrollView>
-              </View>
-            )}
-
-            {!isViewingOwn && (
-              <View style={styles.viewingBanner}>
-                <Ionicons name="eye-outline" size={14} color="#92400e" />
-                <Text style={styles.viewingBannerText}>
-                  Viewing {familyMembers.find(m => m.userId === viewingUserId)?.name ?? 'family member'}'s log (read-only)
+                <Ionicons name="cloud-done-outline" size={16} color="#4f46e5" />
+                <Text style={styles.syncBadgeText}>
+                  🟢 Live sync · {foods.length} foods · {meals.length} meals · {allRecipes.filter(r => r.userId === userId).length} recipes
                 </Text>
               </View>
             )}
 
-            {/* Daily Summary */}
+                        {/* Daily Summary */}
             <View style={styles.section}>
               <View style={styles.sectionHeader}>
                 <Text style={styles.sectionTitle}>Daily Summary</Text>
@@ -2061,7 +1876,7 @@ export default function App() {
               {/* Row 1: title + action buttons */}
               <View style={[styles.sectionHeader, { marginBottom: 10 }]}>
                 <Text style={styles.sectionTitle}>Daily Meals</Text>
-                {isViewingOwn && (
+                {(
                   <View style={{ flexDirection: 'row', gap: 8 }}>
                     <Pressable
                       onPress={() => { setSuggestTab('frequent'); setShowSuggest(true); }}
@@ -2099,14 +1914,13 @@ export default function App() {
                     <Text style={styles.todayButtonText}>Today</Text>
                   </Pressable>
                 )}
-                {isViewingOwn && meals.some(m => m.date === selectedDate) && (
+                {meals.some(m => m.date === selectedDate) && (
                   <Pressable
                     onPress={() => {
                       setBulkSource('day');
                       setBulkAction('move');
                       setBulkTargetDate('');
                       setBulkTargetType('');
-                      setBulkTargetUserId('');
                       setShowBulkTransfer(true);
                     }}
                     style={{ marginLeft: 'auto', flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, backgroundColor: '#ede9fe' }}
@@ -2124,14 +1938,13 @@ export default function App() {
                   <View key={type} style={styles.mealTypeSection}>
                     <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: 1, borderBottomColor: '#e5e7eb', paddingBottom: 8, marginBottom: 12 }}>
                       <Text style={styles.mealTypeTitle}>{type.charAt(0).toUpperCase() + type.slice(1)}</Text>
-                      {isViewingOwn && (
+                      {(
                         <Pressable
                           onPress={() => {
                             setBulkSource(type);
                             setBulkAction('move');
                             setBulkTargetDate('');
                             setBulkTargetType('');
-                            setBulkTargetUserId('');
                             setShowBulkTransfer(true);
                           }}
                           style={{ flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8, backgroundColor: '#ede9fe' }}
@@ -2186,7 +1999,7 @@ export default function App() {
                                       </Text>
                                     </View>
                                   </Pressable>
-                                  {isViewingOwn && (
+                                  {(
                                     <Pressable onPress={() => handleDeleteRecipeInstance(group.instanceId)} style={styles.iconButton}>
                                       <Ionicons name="trash-outline" size={20} color="#ef4444" />
                                     </Pressable>
@@ -2210,7 +2023,7 @@ export default function App() {
                                               } · {Number(meal.calories || 0).toFixed(0)} cal
                                             </Text>
                                           </View>
-                                          {isViewingOwn && (
+                                          {(
                                             <View style={styles.mealActions}>
                                               <Pressable
                                                 onPress={() => { setSwapMeal(meal); setSwapDate(meal.date); setSwapServings(String(meal.amount ?? meal.servings)); setSwapMode(meal.mode || 'servings'); setSwapMealType(meal.mealType || 'breakfast'); }}
@@ -2247,7 +2060,7 @@ export default function App() {
                                     }{' '}- {Number(meal.calories || 0).toFixed(0)} cal
                                   </Text>
                                 </View>
-                                {isViewingOwn && (
+                                {(
                                   <View style={styles.mealActions}>
                                     <Pressable
                                       onPress={() => { setSwapMeal(meal); setSwapDate(meal.date); setSwapServings(String(meal.amount ?? meal.servings)); setSwapMode(meal.mode || 'servings'); setSwapMealType(meal.mealType || 'breakfast'); }}
@@ -2283,7 +2096,7 @@ export default function App() {
             </View>
 
             {/* Recipe Library — only shown when viewing own profile */}
-            {isViewingOwn && (
+            {(
               <View style={styles.section}>
                 <View style={styles.sectionHeader}>
                   <Text style={styles.sectionTitle}>Recipe Library</Text>
@@ -2437,43 +2250,6 @@ export default function App() {
                 ))}
               </View>
 
-              {/* Copy to family member */}
-              {familyMembers.filter(m => m.userId !== userId).length > 0 && (
-                <>
-                  <Text style={[styles.inputLabel, { marginTop: 14 }]}>
-                    Copy to family member{' '}
-                    <Text style={{ color: '#9ca3af', fontWeight: '400' }}>(optional — blank = yourself)</Text>
-                  </Text>
-                  <View style={[styles.pickerButtons, { flexWrap: 'wrap' }]}>
-                    <Pressable
-                      key="self"
-                      onPress={() => setBulkTargetUserId('')}
-                      style={[styles.pickerButton, bulkTargetUserId === '' && styles.pickerButtonActive, { marginBottom: 6 }]}
-                    >
-                      <Text style={[styles.pickerButtonText, bulkTargetUserId === '' && styles.pickerButtonTextActive]}>
-                        Myself
-                      </Text>
-                    </Pressable>
-                    {familyMembers.filter(m => m.userId !== userId).map(member => (
-                      <Pressable
-                        key={member.userId}
-                        onPress={() => setBulkTargetUserId(member.userId)}
-                        style={[styles.pickerButton, bulkTargetUserId === member.userId && styles.pickerButtonActive, { marginBottom: 6 }]}
-                      >
-                        <Text style={[styles.pickerButtonText, bulkTargetUserId === member.userId && styles.pickerButtonTextActive]}>
-                          {member.name}
-                        </Text>
-                      </Pressable>
-                    ))}
-                  </View>
-                  {bulkTargetUserId && bulkTargetUserId !== userId && (
-                    <Text style={{ fontSize: 12, color: '#6b7280', marginTop: 4 }}>
-                      ℹ️ Cross-user transfers are always copies — meals will also stay in your log.
-                    </Text>
-                  )}
-                </>
-              )}
-
               {/* Target date (optional — leave blank to keep same day) */}
               <Text style={[styles.inputLabel, { marginTop: 14 }]}>Target date <Text style={{ color: '#9ca3af', fontWeight: '400' }}>(YYYY-MM-DD — leave blank to keep {selectedDate})</Text></Text>
               <TextInput
@@ -2489,17 +2265,12 @@ export default function App() {
               {/* Summary */}
               {(() => {
                 const src = bulkSource === 'day' ? `all meals on ${selectedDate}` : `${bulkSource} on ${selectedDate}`;
-                const targetName = bulkTargetUserId
-                  ? familyMembers.find(m => m.userId === bulkTargetUserId)?.name ?? 'family member'
-                  : 'yourself';
-                const crossUser = bulkTargetUserId && bulkTargetUserId !== userId;
                 return (
                   <View style={{ backgroundColor: '#f3f4f6', borderRadius: 10, padding: 12, marginTop: 16 }}>
                     <Text style={{ color: '#374151', fontSize: 13 }}>
-                      <Text style={{ fontWeight: '700' }}>{crossUser ? 'Copy' : (bulkAction === 'move' ? 'Move' : 'Copy')}</Text>{' '}
+                      <Text style={{ fontWeight: '700' }}>{bulkAction === 'move' ? 'Move' : 'Copy'}</Text>{' '}
                       {src} → {bulkTargetDate || selectedDate}
                       {bulkTargetType ? ` (${bulkTargetType})` : ''}
-                      {` for ${targetName}`}
                     </Text>
                   </View>
                 );
@@ -2511,7 +2282,7 @@ export default function App() {
               >
                 <Ionicons name="swap-horizontal-outline" size={18} color="#fff" />
                 <Text style={styles.addButtonText}>
-                  {(bulkTargetUserId && bulkTargetUserId !== userId) ? 'Copy to Family Member' : (bulkAction === 'move' ? 'Move Meals' : 'Copy Meals')}
+                  {bulkAction === 'move' ? 'Move Meals' : 'Copy Meals'}
                 </Text>
               </Pressable>
             </ScrollView>
@@ -3628,26 +3399,7 @@ const styles = StyleSheet.create({
   },
   familyBannerText: { fontSize: 13, color: '#4f46e5', flex: 1 },
 
-  memberBar: {
-    flexDirection: 'row', alignItems: 'center', gap: 10,
-    marginHorizontal: 16, marginBottom: 6,
-  },
-  memberBarLabel: { fontSize: 13, color: '#6b7280', fontWeight: '600' },
-  memberChip: {
-    paddingHorizontal: 14, paddingVertical: 7, borderRadius: 20,
-    borderWidth: 1.5, borderColor: '#d1d5db', backgroundColor: '#fff', marginRight: 8,
-  },
-  memberChipActive: { backgroundColor: '#4f46e5', borderColor: '#4f46e5' },
-  memberChipText: { fontSize: 13, color: '#374151', fontWeight: '600' },
-  memberChipTextActive: { color: '#fff' },
 
-  viewingBanner: {
-    flexDirection: 'row', alignItems: 'center', gap: 6,
-    marginHorizontal: 16, marginBottom: 6,
-    backgroundColor: '#fef3c7', borderRadius: 8,
-    paddingHorizontal: 12, paddingVertical: 8,
-  },
-  viewingBannerText: { fontSize: 12, color: '#92400e' },
 
   section: {
     backgroundColor: '#fff', margin: 16, padding: 16, borderRadius: 12,
