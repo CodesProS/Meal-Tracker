@@ -1792,17 +1792,7 @@ export default function App() {
               </Pressable>
             </View>
 
-            {/* Sync status */}
-            {familyId && (
-              <View style={styles.familyBanner}>
-                <Ionicons name="cloud-done-outline" size={16} color="#4f46e5" />
-                <Text style={styles.syncBadgeText}>
-                  🟢 Live sync · {foods.length} foods · {meals.length} meals · {allRecipes.filter(r => r.userId === userId).length} recipes
-                </Text>
-              </View>
-            )}
-
-                        {/* Daily Summary */}
+            {/* Daily Summary */}
             <View style={styles.section}>
               <View style={styles.sectionHeader}>
                 <Text style={styles.sectionTitle}>Daily Summary</Text>
@@ -3391,13 +3381,6 @@ const styles = StyleSheet.create({
     textAlign: 'center', marginVertical: 20,
   },
 
-  familyBanner: {
-    flexDirection: 'row', alignItems: 'center', gap: 8,
-    marginHorizontal: 16, marginBottom: 8,
-    backgroundColor: '#ede9fe', borderRadius: 10,
-    paddingHorizontal: 14, paddingVertical: 10,
-  },
-  familyBannerText: { fontSize: 13, color: '#4f46e5', flex: 1 },
 
 
 
@@ -3559,7 +3542,6 @@ const styles = StyleSheet.create({
   emptySearchText: { padding: 12, color: '#6b7280', fontSize: 13 },
 
   // Sync badge
-  syncBadgeText: { fontSize: 11, color: '#4f46e5', marginTop: 3, opacity: 0.85 },
 
   // Date picker enhancements
   dateTouchable: {
